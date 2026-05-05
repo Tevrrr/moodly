@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 
 type MoodEntry = {
   id: string;
@@ -462,6 +463,20 @@ export default function Home() {
             <p className="mt-3 text-sm text-slate-500">
               {email} · {timezone}
             </p>
+            <div className="mt-5 flex flex-wrap gap-2">
+              <Link
+                href="/"
+                className="rounded-lg bg-slate-950 px-4 py-2 text-sm font-semibold text-white"
+              >
+                Запись
+              </Link>
+              <Link
+                href="/chart"
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-blue-300 hover:text-blue-700"
+              >
+                График
+              </Link>
+            </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-3 lg:w-[520px]">
             <Metric label="За 24 часа" value={average24.toFixed(1)} />
@@ -494,19 +509,16 @@ export default function Home() {
                     type="button"
                     onClick={() => setSelectedScore(score.value)}
                     aria-pressed={isActive}
-                    className={`rounded-lg border p-4 text-left transition hover:-translate-y-0.5 ${
+                    className={`min-h-24 rounded-lg border p-3 text-left transition hover:-translate-y-0.5 ${
                       isActive
                         ? "border-blue-700 ring-2 ring-blue-200"
                         : "border-slate-200 hover:border-slate-300"
                     }`}
                   >
                     <span
-                      className={`flex h-12 w-12 items-center justify-center rounded-lg text-xl font-semibold ${score.bg} ${score.text}`}
+                      className={`inline-flex h-10 min-w-10 items-center justify-start rounded-lg px-3 text-xl font-semibold ${score.bg} ${score.text}`}
                     >
                       {score.label}
-                    </span>
-                    <span className="mt-3 block text-sm font-medium text-slate-700">
-                      {score.tone}
                     </span>
                   </button>
                 );
@@ -619,7 +631,6 @@ export default function Home() {
                         >
                           {entry.score}
                         </span>
-                        <p className="font-medium">{meta.tone}</p>
                       </div>
                       {entry.note ? (
                         <p className="mt-2 break-words text-sm leading-6 text-slate-600">
