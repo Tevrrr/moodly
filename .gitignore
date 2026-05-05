@@ -42,3 +42,4 @@ dev-server.*
 next-env.d.ts
 
 .env*.local
+.vercel
