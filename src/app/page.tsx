@@ -509,17 +509,13 @@ export default function Home() {
                     type="button"
                     onClick={() => setSelectedScore(score.value)}
                     aria-pressed={isActive}
-                    className={`flex aspect-square min-h-20 items-start justify-start rounded-lg border p-3 text-left transition hover:-translate-y-0.5 sm:aspect-[1.32] sm:min-h-24 ${
+                    className={`grid min-h-16 place-items-center rounded-lg border text-2xl font-semibold leading-none shadow-sm transition hover:-translate-y-0.5 hover:shadow-md sm:min-h-20 ${score.bg} ${score.text} ${
                       isActive
-                        ? "border-blue-700 ring-2 ring-blue-200"
-                        : "border-slate-200 hover:border-slate-300"
+                        ? "border-slate-950 ring-2 ring-blue-300"
+                        : "border-transparent"
                     }`}
                   >
-                    <span
-                      className={`grid h-11 min-w-11 place-items-center rounded-lg px-3 text-xl font-semibold leading-none ${score.bg} ${score.text}`}
-                    >
-                      {score.label}
-                    </span>
+                    {score.label}
                   </button>
                 );
               })}
