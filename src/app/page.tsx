@@ -499,7 +499,7 @@ export default function Home() {
               </span>
             </div>
 
-            <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-5">
+            <div className="mt-6 grid grid-cols-5 gap-3">
               {scores.map((score) => {
                 const isActive = selectedScore === score.value;
 
@@ -509,14 +509,14 @@ export default function Home() {
                     type="button"
                     onClick={() => setSelectedScore(score.value)}
                     aria-pressed={isActive}
-                    className={`min-h-24 rounded-lg border p-3 text-left transition hover:-translate-y-0.5 ${
+                    className={`flex aspect-square min-h-20 items-start justify-start rounded-lg border p-3 text-left transition hover:-translate-y-0.5 sm:aspect-[1.32] sm:min-h-24 ${
                       isActive
                         ? "border-blue-700 ring-2 ring-blue-200"
                         : "border-slate-200 hover:border-slate-300"
                     }`}
                   >
                     <span
-                      className={`inline-flex h-10 min-w-10 items-center justify-start rounded-lg px-3 text-xl font-semibold ${score.bg} ${score.text}`}
+                      className={`grid h-11 min-w-11 place-items-center rounded-lg px-3 text-xl font-semibold leading-none ${score.bg} ${score.text}`}
                     >
                       {score.label}
                     </span>
@@ -527,12 +527,12 @@ export default function Home() {
 
             <label className="mt-6 block">
               <span className="text-sm font-medium text-slate-700">
-                Заметка к часу
+                Чем я занимаюсь
               </span>
               <textarea
                 value={note}
                 onChange={(event) => setNote(event.target.value)}
-                placeholder="Что повлияло на настроение в этот час?"
+                placeholder="Например: работаю, отдыхаю, еду, тренируюсь"
                 className="mt-2 min-h-32 w-full resize-none rounded-lg border border-slate-200 bg-slate-50 p-4 text-base outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:bg-white"
                 maxLength={noteLimit}
               />
