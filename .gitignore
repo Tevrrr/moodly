@@ -40,5 +40,3 @@ dev-server.*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-
-.vercel

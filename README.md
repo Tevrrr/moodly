@@ -19,7 +19,7 @@ vercel env pull .env.local
 npm run db:init
 ```
 
-Скрипт `db:init` читает `DATABASE_URL` из окружения или из `.env.local`.
+Скрипт `db:init` читает `DATABASE_URL` или `MOOD_DATABASE_URL` из окружения или из `.env.local`.
 
 ## Запуск
 

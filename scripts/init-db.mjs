@@ -1,32 +1,23 @@
 import { neon } from "@neondatabase/serverless";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
+import process from "node:process";
 
-if (!process.env.DATABASE_URL && existsSync(".env.local")) {
-  const lines = readFileSync(".env.local", "utf8").split(/\r?\n/);
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) {
-      continue;
-    }
-
-    const separator = trimmed.indexOf("=");
-    if (separator === -1) {
-      continue;
-    }
-
-    const key = trimmed.slice(0, separator);
-    const value = trimmed.slice(separator + 1).replace(/^['"]|['"]$/g, "");
-    process.env[key] = value;
-  }
+if (
+  !process.env.DATABASE_URL &&
+  !process.env.MOOD_DATABASE_URL &&
+  existsSync(".env.local")
+) {
+  process.loadEnvFile(".env.local");
 }
 
-if (!process.env.DATABASE_URL) {
-  console.error("DATABASE_URL is not configured");
+const databaseUrl = process.env.DATABASE_URL ?? process.env.MOOD_DATABASE_URL;
+
+if (!databaseUrl) {
+  console.error("DATABASE_URL or MOOD_DATABASE_URL is not configured");
   process.exit(1);
 }
 
-const sql = neon(process.env.DATABASE_URL);
+const sql = neon(databaseUrl);
 
 await sql`
   create table if not exists mood_users (
