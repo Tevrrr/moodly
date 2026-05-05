@@ -26,6 +26,19 @@ type EntryRow = {
   updatedAt: string;
 };
 
+function readPositiveInteger(value: string | null, fallback: number) {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return fallback;
+  }
+
+  return parsed;
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const emailValue = url.searchParams.get("email");
@@ -35,7 +48,43 @@ export async function GET(request: Request) {
   }
 
   const email = normalizeEmail(emailValue);
+  const shouldPaginate =
+    url.searchParams.has("page") || url.searchParams.has("limit");
   const sql = getSql();
+
+  if (!shouldPaginate) {
+    const entries = (await sql`
+      select
+        id,
+        user_email as "userEmail",
+        score,
+        note,
+        hour_key as "hourKey",
+        timezone,
+        created_at as "createdAt",
+        updated_at as "updatedAt"
+      from mood_entries
+      where user_email = ${email}
+        and hour_key >= now() - interval '7 days'
+      order by hour_key desc
+      limit 168
+    `) as unknown as EntryRow[];
+
+    return Response.json({ entries });
+  }
+
+  const page = Math.max(readPositiveInteger(url.searchParams.get("page"), 1), 1);
+  const pageSize = Math.min(
+    readPositiveInteger(url.searchParams.get("limit"), 168),
+    168,
+  );
+  const offset = (page - 1) * pageSize;
+
+  const totals = (await sql`
+    select count(*)::int as total
+    from mood_entries
+    where user_email = ${email}
+  `) as unknown as Array<{ total: number }>;
 
   const entries = (await sql`
     select
@@ -49,12 +98,25 @@ export async function GET(request: Request) {
       updated_at as "updatedAt"
     from mood_entries
     where user_email = ${email}
-      and hour_key >= now() - interval '7 days'
     order by hour_key desc
-    limit 168
+    limit ${pageSize}
+    offset ${offset}
   `) as unknown as EntryRow[];
 
-  return Response.json({ entries });
+  const total = totals[0]?.total ?? 0;
+  const totalPages = Math.max(Math.ceil(total / pageSize), 1);
+
+  return Response.json({
+    entries,
+    pagination: {
+      page,
+      pageSize,
+      total,
+      totalPages,
+      hasPrevious: page > 1,
+      hasNext: page < totalPages,
+    },
+  });
 }
 
 export async function POST(request: Request) {

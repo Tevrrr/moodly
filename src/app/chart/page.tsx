@@ -21,6 +21,7 @@ type MoodEntry = {
 
 type ApiEntriesResponse = {
   entries: MoodEntry[];
+  pagination?: EntriesPagination;
 };
 
 type ChartPoint = MoodEntry & {
@@ -34,7 +35,18 @@ type DayColumn = {
   shortLabel: string;
 };
 
+type EntriesPagination = {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  hasPrevious: boolean;
+  hasNext: boolean;
+};
+
 const emailStorageKey = "mood-tracker.email";
+const chartPageSize = 98;
+const tablePageSize = 98;
 const chartWidth = 960;
 const chartHeight = 350;
 const chartPaddingX = 42;
@@ -84,6 +96,24 @@ function formatShortDayLabel(dayKey: string) {
   }).format(new Date(`${dayKey}T12:00:00`));
 }
 
+function formatDateRange(entries: MoodEntry[]) {
+  if (entries.length === 0) {
+    return "Нет данных";
+  }
+
+  const ordered = [...entries].sort(
+    (a, b) => new Date(a.hourKey).getTime() - new Date(b.hourKey).getTime(),
+  );
+  const formatter = new Intl.DateTimeFormat("ru", {
+    day: "numeric",
+    month: "short",
+  });
+
+  return `${formatter.format(new Date(ordered[0].hourKey))} - ${formatter.format(
+    new Date(ordered[ordered.length - 1].hourKey),
+  )}`;
+}
+
 async function readError(response: Response) {
   try {
     const body = (await response.json()) as { error?: string };
@@ -95,8 +125,28 @@ async function readError(response: Response) {
 
 export default function ChartPage() {
   const [email, setEmail] = useState("");
-  const [entries, setEntries] = useState<MoodEntry[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [chartEntries, setChartEntries] = useState<MoodEntry[]>([]);
+  const [tableEntries, setTableEntries] = useState<MoodEntry[]>([]);
+  const [chartPage, setChartPage] = useState(1);
+  const [tablePage, setTablePage] = useState(1);
+  const [chartPagination, setChartPagination] = useState<EntriesPagination>({
+    page: 1,
+    pageSize: chartPageSize,
+    total: 0,
+    totalPages: 1,
+    hasPrevious: false,
+    hasNext: false,
+  });
+  const [tablePagination, setTablePagination] = useState<EntriesPagination>({
+    page: 1,
+    pageSize: tablePageSize,
+    total: 0,
+    totalPages: 1,
+    hasPrevious: false,
+    hasNext: false,
+  });
+  const [isChartLoading, setIsChartLoading] = useState(false);
+  const [isTableLoading, setIsTableLoading] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -112,13 +162,13 @@ export default function ChartPage() {
 
     let ignored = false;
 
-    async function loadEntries() {
-      setIsLoading(true);
+    async function loadChartEntries() {
+      setIsChartLoading(true);
       setError("");
 
       try {
         const response = await fetch(
-          `/api/entries?email=${encodeURIComponent(email)}`,
+          `/api/entries?email=${encodeURIComponent(email)}&page=${chartPage}&limit=${chartPageSize}`,
         );
 
         if (!response.ok) {
@@ -127,7 +177,17 @@ export default function ChartPage() {
 
         const data = (await response.json()) as ApiEntriesResponse;
         if (!ignored) {
-          setEntries(data.entries);
+          setChartEntries(data.entries);
+          setChartPagination(
+            data.pagination ?? {
+              page: chartPage,
+              pageSize: chartPageSize,
+              total: data.entries.length,
+              totalPages: 1,
+              hasPrevious: false,
+              hasNext: false,
+            },
+          );
         }
       } catch (loadError) {
         if (!ignored) {
@@ -139,20 +199,76 @@ export default function ChartPage() {
         }
       } finally {
         if (!ignored) {
-          setIsLoading(false);
+          setIsChartLoading(false);
         }
       }
     }
 
-    void loadEntries();
+    void loadChartEntries();
 
     return () => {
       ignored = true;
     };
-  }, [email]);
+  }, [chartPage, email]);
+
+  useEffect(() => {
+    if (!email) {
+      return;
+    }
+
+    let ignored = false;
+
+    async function loadTableEntries() {
+      setIsTableLoading(true);
+      setError("");
+
+      try {
+        const response = await fetch(
+          `/api/entries?email=${encodeURIComponent(email)}&page=${tablePage}&limit=${tablePageSize}`,
+        );
+
+        if (!response.ok) {
+          throw new Error(await readError(response));
+        }
+
+        const data = (await response.json()) as ApiEntriesResponse;
+        if (!ignored) {
+          setTableEntries(data.entries);
+          setTablePagination(
+            data.pagination ?? {
+              page: tablePage,
+              pageSize: tablePageSize,
+              total: data.entries.length,
+              totalPages: 1,
+              hasPrevious: false,
+              hasNext: false,
+            },
+          );
+        }
+      } catch (loadError) {
+        if (!ignored) {
+          setError(
+            loadError instanceof Error
+              ? loadError.message
+              : "РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ С‚Р°Р±Р»РёС†Сѓ",
+          );
+        }
+      } finally {
+        if (!ignored) {
+          setIsTableLoading(false);
+        }
+      }
+    }
+
+    void loadTableEntries();
+
+    return () => {
+      ignored = true;
+    };
+  }, [email, tablePage]);
 
   const chartPoints = useMemo<ChartPoint[]>(() => {
-    const ordered = [...entries]
+    const ordered = [...chartEntries]
       .sort(
         (a, b) =>
           new Date(a.hourKey).getTime() - new Date(b.hourKey).getTime(),
@@ -171,52 +287,61 @@ export default function ChartPage() {
       x: chartPaddingX + step * index,
       y: chartPaddingY + ((10 - entry.score) / 9) * chartPlotHeight,
     }));
-  }, [entries]);
+  }, [chartEntries]);
 
   const average = useMemo(() => {
-    if (entries.length === 0) {
+    if (chartEntries.length === 0) {
       return 0;
     }
 
-    return entries.reduce((sum, entry) => sum + entry.score, 0) / entries.length;
-  }, [entries]);
+    return (
+      chartEntries.reduce((sum, entry) => sum + entry.score, 0) /
+      chartEntries.length
+    );
+  }, [chartEntries]);
 
   const tableDays = useMemo<DayColumn[]>(() => {
-    const today = new Date();
-    today.setHours(12, 0, 0, 0);
+    const dayKeys = new Set<string>();
 
-    return Array.from({ length: 7 }).map((_, index) => {
-      const date = new Date(today);
-      date.setDate(today.getDate() - (6 - index));
-      const key = getDayKey(date);
+    for (const entry of tableEntries) {
+      dayKeys.add(getDayKey(new Date(entry.hourKey)));
+    }
 
-      return {
-        key,
-        label: formatDayLabel(key),
-        shortLabel: formatShortDayLabel(key),
-      };
-    });
-  }, []);
+    return [...dayKeys].sort().map((key) => ({
+      key,
+      label: formatDayLabel(key),
+      shortLabel: formatShortDayLabel(key),
+    }));
+  }, [tableEntries]);
 
   const tableHours = useMemo(() => {
     const hours = new Set<number>();
 
-    for (const entry of entries) {
+    for (const entry of tableEntries) {
       hours.add(new Date(entry.hourKey).getHours());
     }
 
     return [...hours].sort((a, b) => a - b);
-  }, [entries]);
+  }, [tableEntries]);
 
   const entryByDayHour = useMemo(() => {
     const map = new Map<string, MoodEntry>();
 
-    for (const entry of entries) {
+    for (const entry of tableEntries) {
       map.set(getHourKey(new Date(entry.hourKey)), entry);
     }
 
     return map;
-  }, [entries]);
+  }, [tableEntries]);
+
+  const chartDateRange = useMemo(
+    () => formatDateRange(chartEntries),
+    [chartEntries],
+  );
+  const tableDateRange = useMemo(
+    () => formatDateRange(tableEntries),
+    [tableEntries],
+  );
 
   return (
     <AppShell>
@@ -226,7 +351,8 @@ export default function ChartPage() {
         activePage="chart"
         metrics={[
           { label: "Среднее", value: average.toFixed(1) },
-          { label: "Точек", value: String(entries.length) },
+          { label: "Показано", value: String(chartEntries.length) },
+          { label: "Всего", value: String(chartPagination.total) },
         ]}
       />
 
@@ -245,12 +371,25 @@ export default function ChartPage() {
                 <p className="mt-1 text-sm text-slate-500">
                   Наведите на точку, чтобы увидеть занятие и оценку.
                 </p>
+                <p className="mt-2 text-sm font-medium text-slate-700">
+                  {chartDateRange}
+                </p>
               </div>
-              {isLoading ? (
-                <span className="w-fit rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-500">
-                  Загрузка...
-                </span>
-              ) : null}
+              <PaginationControls
+                page={chartPagination.page}
+                totalPages={chartPagination.totalPages}
+                hasPrevious={chartPagination.hasPrevious}
+                hasNext={chartPagination.hasNext}
+                isLoading={isChartLoading}
+                onNewer={() =>
+                  setChartPage((current) => Math.max(current - 1, 1))
+                }
+                onOlder={() =>
+                  setChartPage((current) =>
+                    Math.min(current + 1, chartPagination.totalPages),
+                  )
+                }
+              />
             </div>
 
             {error ? (
@@ -259,7 +398,7 @@ export default function ChartPage() {
               </div>
             ) : null}
 
-            {!isLoading && chartPoints.length === 0 ? (
+            {!isChartLoading && chartPoints.length === 0 ? (
               <div className="mt-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-slate-500">
                 Записей для графика пока нет.
               </div>
@@ -408,20 +547,40 @@ export default function ChartPage() {
                 <p className="mt-1 text-sm text-slate-500">
                   Формат: чем я занимаюсь и H = оценка настроения.
                 </p>
+                <p className="mt-2 text-sm font-medium text-slate-700">
+                  {tableDateRange}
+                </p>
               </div>
-              <div className="flex flex-wrap gap-1.5">
-                {scoreScale.map((score) => (
-                  <span
-                    key={score.value}
-                    className={cn(
-                      "inline-flex h-6 min-w-6 items-center justify-center rounded-md px-1.5 text-xs font-semibold",
-                      score.bg,
-                      score.text,
-                    )}
-                  >
-                    {score.value}
-                  </span>
-                ))}
+              <div className="flex flex-col gap-3 sm:items-end">
+                <div className="flex flex-wrap gap-1.5">
+                  {scoreScale.map((score) => (
+                    <span
+                      key={score.value}
+                      className={cn(
+                        "inline-flex h-6 min-w-6 items-center justify-center rounded-md px-1.5 text-xs font-semibold",
+                        score.bg,
+                        score.text,
+                      )}
+                    >
+                      {score.value}
+                    </span>
+                  ))}
+                </div>
+                <PaginationControls
+                  page={tablePagination.page}
+                  totalPages={tablePagination.totalPages}
+                  hasPrevious={tablePagination.hasPrevious}
+                  hasNext={tablePagination.hasNext}
+                  isLoading={isTableLoading}
+                  onNewer={() =>
+                    setTablePage((current) => Math.max(current - 1, 1))
+                  }
+                  onOlder={() =>
+                    setTablePage((current) =>
+                      Math.min(current + 1, tablePagination.totalPages),
+                    )
+                  }
+                />
               </div>
             </div>
 
@@ -495,5 +654,49 @@ export default function ChartPage() {
         </>
       )}
     </AppShell>
+  );
+}
+
+function PaginationControls({
+  page,
+  totalPages,
+  hasPrevious,
+  hasNext,
+  isLoading,
+  onNewer,
+  onOlder,
+}: {
+  page: number;
+  totalPages: number;
+  hasPrevious: boolean;
+  hasNext: boolean;
+  isLoading: boolean;
+  onNewer: () => void;
+  onOlder: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2 sm:items-end">
+      <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-sm shadow-slate-200/70">
+        <button
+          type="button"
+          onClick={onNewer}
+          disabled={!hasPrevious || isLoading}
+          className="rounded-md px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
+        >
+          Новее
+        </button>
+        <button
+          type="button"
+          onClick={onOlder}
+          disabled={!hasNext || isLoading}
+          className="rounded-md px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
+        >
+          Старее
+        </button>
+      </div>
+      <p className="text-xs font-medium text-slate-500">
+        {isLoading ? "Загрузка..." : `Страница ${page} из ${totalPages}`}
+      </p>
+    </div>
   );
 }
