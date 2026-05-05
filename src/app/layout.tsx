@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Дневник настроения",
-  description: "Простое приложение для отслеживания настроения по дням.",
+  title: "Почасовой дневник настроения",
+  description: "Приложение для почасовой оценки настроения от 1 до 10.",
 };
 
 export default function RootLayout({

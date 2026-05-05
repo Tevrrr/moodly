@@ -1,223 +1,512 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-
-type Mood = {
-  id: string;
-  label: string;
-  tone: string;
-  score: number;
-  accent: string;
-};
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type MoodEntry = {
   id: string;
-  date: string;
-  moodId: string;
+  userEmail: string;
+  score: number;
   note: string;
+  hourKey: string;
+  timezone: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
-const moods: Mood[] = [
-  {
-    id: "great",
-    label: "Отлично",
-    tone: "Энергия",
-    score: 5,
-    accent: "bg-emerald-500",
-  },
-  {
-    id: "good",
-    label: "Хорошо",
-    tone: "Спокойно",
-    score: 4,
-    accent: "bg-sky-500",
-  },
-  {
-    id: "neutral",
-    label: "Нормально",
-    tone: "Ровно",
-    score: 3,
-    accent: "bg-amber-500",
-  },
-  {
-    id: "tired",
-    label: "Усталость",
-    tone: "Низкий заряд",
-    score: 2,
-    accent: "bg-orange-500",
-  },
-  {
-    id: "hard",
-    label: "Сложно",
-    tone: "Нужна пауза",
-    score: 1,
-    accent: "bg-rose-500",
-  },
+type ApiEntryResponse = {
+  entry: MoodEntry;
+};
+
+type ApiEntriesResponse = {
+  entries: MoodEntry[];
+};
+
+const emailStorageKey = "mood-tracker.email";
+const notificationStorageKey = "mood-tracker.notifications";
+const noteLimit = 280;
+
+const scores = [
+  { value: 1, label: "1", tone: "Тяжело", bg: "bg-gray-800", text: "text-white" },
+  { value: 2, label: "2", tone: "Низко", bg: "bg-gray-700", text: "text-white" },
+  { value: 3, label: "3", tone: "Пасмурно", bg: "bg-gray-600", text: "text-white" },
+  { value: 4, label: "4", tone: "Усталость", bg: "bg-gray-500", text: "text-white" },
+  { value: 5, label: "5", tone: "Ровно", bg: "bg-gray-400", text: "text-gray-950" },
+  { value: 6, label: "6", tone: "Спокойно", bg: "bg-sky-300", text: "text-sky-950" },
+  { value: 7, label: "7", tone: "Нормально", bg: "bg-sky-400", text: "text-sky-950" },
+  { value: 8, label: "8", tone: "Хорошо", bg: "bg-sky-500", text: "text-white" },
+  { value: 9, label: "9", tone: "Отлично", bg: "bg-blue-600", text: "text-white" },
+  { value: 10, label: "10", tone: "Сильно", bg: "bg-blue-700", text: "text-white" },
 ];
 
-const storageKey = "mood-tracker.entries";
-
-function todayKey() {
-  return new Date().toISOString().slice(0, 10);
+function getTimezone() {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 }
 
-function formatDate(date: string) {
+function getCurrentHourKey() {
+  const date = new Date();
+  date.setMinutes(0, 0, 0);
+  return date.toISOString();
+}
+
+function formatHour(value: string) {
   return new Intl.DateTimeFormat("ru", {
     day: "numeric",
-    month: "long",
-  }).format(new Date(`${date}T12:00:00`));
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
 }
 
-function getMood(id: string) {
-  return moods.find((mood) => mood.id === id) ?? moods[2];
+function formatCurrentHour() {
+  return new Intl.DateTimeFormat("ru", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(getCurrentHourKey()));
+}
+
+function getScoreMeta(score: number) {
+  return scores.find((item) => item.value === score) ?? scores[4];
+}
+
+function isActiveReminderHour(date: Date) {
+  const hour = date.getHours();
+  return hour >= 10 && hour < 24;
+}
+
+function getNextReminderDelay() {
+  const now = new Date();
+  const next = new Date(now);
+  next.setMinutes(0, 0, 0);
+  next.setHours(now.getHours() + 1);
+
+  if (next.getHours() < 10) {
+    next.setHours(10, 0, 0, 0);
+  }
+
+  return Math.max(next.getTime() - now.getTime(), 1000);
+}
+
+async function readError(response: Response) {
+  try {
+    const body = (await response.json()) as { error?: string };
+    return body.error ?? "Ошибка запроса";
+  } catch {
+    return "Ошибка запроса";
+  }
 }
 
 export default function Home() {
+  const reminderTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [emailInput, setEmailInput] = useState("");
+  const [email, setEmail] = useState("");
   const [entries, setEntries] = useState<MoodEntry[]>([]);
-  const [selectedMood, setSelectedMood] = useState(moods[2].id);
+  const [selectedScore, setSelectedScore] = useState(5);
   const [note, setNote] = useState("");
-  const [loaded, setLoaded] = useState(false);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [notificationPermission, setNotificationPermission] =
+    useState<NotificationPermission | "unsupported">("default");
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
+
+  const timezone = useMemo(() => getTimezone(), []);
+  const currentHourKey = getCurrentHourKey();
+
+  const currentEntry = useMemo(
+    () => entries.find((entry) => entry.hourKey === currentHourKey),
+    [currentHourKey, entries],
+  );
+
+  const average24 = useMemo(() => {
+    const recent = entries.slice(0, 24);
+    if (recent.length === 0) {
+      return 0;
+    }
+
+    return recent.reduce((sum, entry) => sum + entry.score, 0) / recent.length;
+  }, [entries]);
+
+  const average7Days = useMemo(() => {
+    if (entries.length === 0) {
+      return 0;
+    }
+
+    return entries.reduce((sum, entry) => sum + entry.score, 0) / entries.length;
+  }, [entries]);
 
   useEffect(() => {
     queueMicrotask(() => {
-      const stored = window.localStorage.getItem(storageKey);
+      const storedEmail = window.localStorage.getItem(emailStorageKey) ?? "";
+      const storedNotifications =
+        window.localStorage.getItem(notificationStorageKey) === "true";
 
-      if (stored) {
-        try {
-          const parsed = JSON.parse(stored) as MoodEntry[];
-          setEntries(parsed);
+      setEmail(storedEmail);
+      setEmailInput(storedEmail);
+      setNotificationsEnabled(storedNotifications);
 
-          const todayEntry = parsed.find((entry) => entry.date === todayKey());
-          if (todayEntry) {
-            setSelectedMood(todayEntry.moodId);
-            setNote(todayEntry.note);
-          }
-        } catch {
-          window.localStorage.removeItem(storageKey);
-        }
+      if (!("Notification" in window)) {
+        setNotificationPermission("unsupported");
+      } else {
+        setNotificationPermission(Notification.permission);
       }
-
-      setLoaded(true);
     });
   }, []);
 
   useEffect(() => {
-    if (loaded) {
-      window.localStorage.setItem(storageKey, JSON.stringify(entries));
-    }
-  }, [entries, loaded]);
-
-  const sortedEntries = useMemo(
-    () =>
-      [...entries].sort(
-        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
-      ),
-    [entries],
-  );
-
-  const weekEntries = useMemo(() => sortedEntries.slice(0, 7), [sortedEntries]);
-
-  const averageScore = useMemo(() => {
-    if (weekEntries.length === 0) {
-      return 0;
+    if (!email) {
+      return;
     }
 
-    const total = weekEntries.reduce(
-      (sum, entry) => sum + getMood(entry.moodId).score,
-      0,
-    );
-    return total / weekEntries.length;
-  }, [weekEntries]);
+    let ignored = false;
 
-  const streak = useMemo(() => {
-    const dates = new Set(entries.map((entry) => entry.date));
-    let count = 0;
-    const cursor = new Date(`${todayKey()}T12:00:00`);
+    async function loadEntries() {
+      setIsLoading(true);
+      setError("");
 
-    while (dates.has(cursor.toISOString().slice(0, 10))) {
-      count += 1;
-      cursor.setDate(cursor.getDate() - 1);
+      try {
+        const response = await fetch(
+          `/api/entries?email=${encodeURIComponent(email)}`,
+        );
+
+        if (!response.ok) {
+          throw new Error(await readError(response));
+        }
+
+        const data = (await response.json()) as ApiEntriesResponse;
+        if (!ignored) {
+          setEntries(data.entries);
+          const entry = data.entries.find(
+            (item) => item.hourKey === getCurrentHourKey(),
+          );
+
+          if (entry) {
+            setSelectedScore(entry.score);
+            setNote(entry.note);
+          } else {
+            setNote("");
+          }
+        }
+      } catch (loadError) {
+        if (!ignored) {
+          setError(
+            loadError instanceof Error
+              ? loadError.message
+              : "Не удалось загрузить историю",
+          );
+        }
+      } finally {
+        if (!ignored) {
+          setIsLoading(false);
+        }
+      }
     }
 
-    return count;
-  }, [entries]);
+    void loadEntries();
 
-  const todayEntry = entries.find((entry) => entry.date === todayKey());
-
-  function saveEntry() {
-    const entry: MoodEntry = {
-      id: todayEntry?.id ?? crypto.randomUUID(),
-      date: todayKey(),
-      moodId: selectedMood,
-      note: note.trim(),
+    return () => {
+      ignored = true;
     };
+  }, [email]);
 
-    setEntries((current) => [
-      entry,
-      ...current.filter((item) => item.date !== entry.date),
-    ]);
+  useEffect(() => {
+    if (reminderTimer.current) {
+      clearTimeout(reminderTimer.current);
+      reminderTimer.current = null;
+    }
+
+    if (
+      !notificationsEnabled ||
+      notificationPermission !== "granted" ||
+      !("Notification" in window)
+    ) {
+      return;
+    }
+
+    function scheduleNextReminder() {
+      reminderTimer.current = setTimeout(() => {
+        if (isActiveReminderHour(new Date())) {
+          new Notification("Mood Tracker", {
+            body: "Поставьте оценку настроения за этот час.",
+          });
+        }
+
+        scheduleNextReminder();
+      }, getNextReminderDelay());
+    }
+
+    scheduleNextReminder();
+
+    return () => {
+      if (reminderTimer.current) {
+        clearTimeout(reminderTimer.current);
+        reminderTimer.current = null;
+      }
+    };
+  }, [notificationPermission, notificationsEnabled]);
+
+  async function syncUser(nextEmail: string, nextNotifications: boolean) {
+    const response = await fetch("/api/user", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: nextEmail,
+        timezone,
+        notificationsEnabled: nextNotifications,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
   }
 
-  function removeEntry(id: string) {
-    setEntries((current) => current.filter((entry) => entry.id !== id));
+  async function handleEmailSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const nextEmail = emailInput.trim().toLowerCase();
+    if (!nextEmail) {
+      setError("Введите email.");
+      return;
+    }
+
+    setIsSaving(true);
+    setError("");
+
+    try {
+      await syncUser(nextEmail, notificationsEnabled);
+      window.localStorage.setItem(emailStorageKey, nextEmail);
+      setEmail(nextEmail);
+      setStatus("Профиль сохранен.");
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Не удалось сохранить email",
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function saveEntry() {
+    if (!email) {
+      setError("Сначала укажите email.");
+      return;
+    }
+
+    setIsSaving(true);
+    setError("");
+    setStatus("");
+
+    try {
+      const response = await fetch("/api/entries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          score: selectedScore,
+          note,
+          hourKey: getCurrentHourKey(),
+          timezone,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      const data = (await response.json()) as ApiEntryResponse;
+      setEntries((current) => [
+        data.entry,
+        ...current.filter((entry) => entry.id !== data.entry.id),
+      ].sort(
+        (a, b) =>
+          new Date(b.hourKey).getTime() - new Date(a.hourKey).getTime(),
+      ));
+      setStatus("Оценка сохранена.");
+    } catch (saveError) {
+      setError(
+        saveError instanceof Error
+          ? saveError.message
+          : "Не удалось сохранить оценку",
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function removeEntry(id: string) {
+    setError("");
+    setStatus("");
+
+    try {
+      const response = await fetch(
+        `/api/entries/${encodeURIComponent(id)}?email=${encodeURIComponent(
+          email,
+        )}`,
+        { method: "DELETE" },
+      );
+
+      if (!response.ok) {
+        throw new Error(await readError(response));
+      }
+
+      setEntries((current) => current.filter((entry) => entry.id !== id));
+      setStatus("Запись удалена.");
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : "Не удалось удалить запись",
+      );
+    }
+  }
+
+  async function enableNotifications() {
+    if (!("Notification" in window)) {
+      setNotificationPermission("unsupported");
+      setError("Этот браузер не поддерживает уведомления.");
+      return;
+    }
+
+    const permission = await Notification.requestPermission();
+    setNotificationPermission(permission);
+
+    const nextEnabled = permission === "granted";
+    setNotificationsEnabled(nextEnabled);
+    window.localStorage.setItem(notificationStorageKey, String(nextEnabled));
+
+    if (email) {
+      try {
+        await syncUser(email, nextEnabled);
+      } catch {
+        setError("Уведомления включены локально, но профиль не обновился в БД.");
+      }
+    }
+
+    setStatus(
+      nextEnabled
+        ? "Уведомления включены для открытой вкладки."
+        : "Разрешение на уведомления не выдано.",
+    );
+  }
+
+  function switchProfile() {
+    window.localStorage.removeItem(emailStorageKey);
+    setEmail("");
+    setEmailInput("");
+    setEntries([]);
+    setNote("");
+    setStatus("");
+    setError("");
+  }
+
+  if (!email) {
+    return (
+      <main className="min-h-screen bg-slate-100 text-slate-950">
+        <section className="mx-auto flex min-h-screen w-full max-w-xl flex-col justify-center px-5 py-10">
+          <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">
+            Mood Tracker
+          </p>
+          <h1 className="mt-3 text-4xl font-semibold leading-tight">
+            Почасовой дневник настроения
+          </h1>
+          <form
+            onSubmit={handleEmailSubmit}
+            className="mt-8 rounded-lg border border-slate-200 bg-white p-5 shadow-sm"
+          >
+            <label className="block">
+              <span className="text-sm font-medium text-slate-700">Email</span>
+              <input
+                type="email"
+                value={emailInput}
+                onChange={(event) => setEmailInput(event.target.value)}
+                placeholder="you@example.com"
+                className="mt-2 h-12 w-full rounded-lg border border-slate-200 px-4 text-base outline-none transition focus:border-blue-500"
+                autoComplete="email"
+              />
+            </label>
+            <p className="mt-3 text-sm leading-6 text-slate-500">
+              Пароля нет. Email хранится локально в браузере и используется как
+              ключ для ваших записей.
+            </p>
+            <button
+              type="submit"
+              disabled={isSaving}
+              className="mt-5 h-12 w-full rounded-lg bg-blue-700 px-5 text-sm font-semibold text-white transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+            >
+              {isSaving ? "Сохраняю..." : "Продолжить"}
+            </button>
+            {error ? <p className="mt-4 text-sm text-rose-600">{error}</p> : null}
+          </form>
+        </section>
+      </main>
+    );
   }
 
   return (
-    <main className="min-h-screen bg-[#f7f5ef] text-[#161615]">
+    <main className="min-h-screen bg-slate-100 text-slate-950">
       <section className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-8 px-5 py-6 sm:px-8 lg:px-10">
-        <header className="flex flex-col gap-4 border-b border-black/10 pb-6 sm:flex-row sm:items-end sm:justify-between">
+        <header className="flex flex-col gap-5 border-b border-slate-200 pb-6 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <p className="text-sm font-medium uppercase tracking-[0.18em] text-[#5d6657]">
+            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">
               Mood Tracker
             </p>
-            <h1 className="mt-3 max-w-2xl text-4xl font-semibold leading-tight sm:text-5xl">
-              Дневник настроения
+            <h1 className="mt-3 text-4xl font-semibold leading-tight sm:text-5xl">
+              Почасовой дневник настроения
             </h1>
+            <p className="mt-3 text-sm text-slate-500">
+              {email} · {timezone}
+            </p>
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:w-72">
-            <Metric label="Среднее за 7 дней" value={averageScore.toFixed(1)} />
-            <Metric label="Серия дней" value={String(streak)} />
+          <div className="grid gap-3 sm:grid-cols-3 lg:w-[520px]">
+            <Metric label="За 24 часа" value={average24.toFixed(1)} />
+            <Metric label="За 7 дней" value={average7Days.toFixed(1)} />
+            <Metric label="Записей" value={String(entries.length)} />
           </div>
         </header>
 
         <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
-          <section className="rounded-lg border border-black/10 bg-white p-5 shadow-sm sm:p-6">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <h2 className="text-2xl font-semibold">Сегодня</h2>
-                <p className="mt-1 text-sm text-black/60">
-                  {formatDate(todayKey())}
+                <h2 className="text-2xl font-semibold">Текущий час</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  {formatCurrentHour()}
                 </p>
               </div>
-              <span className="w-fit rounded-full border border-black/10 px-3 py-1 text-sm text-black/60">
-                {todayEntry ? "Запись сохранена" : "Новая запись"}
+              <span className="w-fit rounded-full border border-slate-200 px-3 py-1 text-sm text-slate-500">
+                {currentEntry ? "Запись сохранена" : "Новая запись"}
               </span>
             </div>
 
-            <div className="mt-6 grid gap-3 sm:grid-cols-5">
-              {moods.map((mood) => {
-                const isActive = selectedMood === mood.id;
+            <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-5">
+              {scores.map((score) => {
+                const isActive = selectedScore === score.value;
 
                 return (
                   <button
-                    key={mood.id}
+                    key={score.value}
                     type="button"
-                    onClick={() => setSelectedMood(mood.id)}
-                    className={`rounded-lg border p-4 text-left transition hover:-translate-y-0.5 hover:border-black/25 ${
-                      isActive
-                        ? "border-black bg-[#f2efe6] shadow-sm"
-                        : "border-black/10 bg-white"
-                    }`}
+                    onClick={() => setSelectedScore(score.value)}
                     aria-pressed={isActive}
+                    className={`rounded-lg border p-4 text-left transition hover:-translate-y-0.5 ${
+                      isActive
+                        ? "border-blue-700 ring-2 ring-blue-200"
+                        : "border-slate-200 hover:border-slate-300"
+                    }`}
                   >
                     <span
-                      className={`block h-2 w-10 rounded-full ${mood.accent}`}
-                    />
-                    <span className="mt-4 block font-semibold">
-                      {mood.label}
+                      className={`flex h-12 w-12 items-center justify-center rounded-lg text-xl font-semibold ${score.bg} ${score.text}`}
+                    >
+                      {score.label}
                     </span>
-                    <span className="mt-1 block text-sm text-black/55">
-                      {mood.tone}
+                    <span className="mt-3 block text-sm font-medium text-slate-700">
+                      {score.tone}
                     </span>
                   </button>
                 );
@@ -225,110 +514,123 @@ export default function Home() {
             </div>
 
             <label className="mt-6 block">
-              <span className="text-sm font-medium text-black/70">
-                Короткая заметка
+              <span className="text-sm font-medium text-slate-700">
+                Заметка к часу
               </span>
               <textarea
                 value={note}
                 onChange={(event) => setNote(event.target.value)}
-                placeholder="Что сегодня повлияло на настроение?"
-                className="mt-2 min-h-36 w-full resize-none rounded-lg border border-black/10 bg-[#fbfaf6] p-4 text-base outline-none transition placeholder:text-black/35 focus:border-black/35 focus:bg-white"
-                maxLength={280}
+                placeholder="Что повлияло на настроение в этот час?"
+                className="mt-2 min-h-32 w-full resize-none rounded-lg border border-slate-200 bg-slate-50 p-4 text-base outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:bg-white"
+                maxLength={noteLimit}
               />
             </label>
 
             <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-sm text-black/50">{note.length}/280</p>
+              <p className="text-sm text-slate-500">
+                {note.length}/{noteLimit}
+              </p>
               <button
                 type="button"
                 onClick={saveEntry}
-                className="rounded-lg bg-[#161615] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#35332e]"
+                disabled={isSaving}
+                className="rounded-lg bg-blue-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-400"
               >
-                Сохранить день
+                {isSaving ? "Сохраняю..." : "Сохранить оценку"}
               </button>
             </div>
           </section>
 
-          <aside className="rounded-lg border border-black/10 bg-[#22312d] p-5 text-white shadow-sm sm:p-6">
-            <h2 className="text-xl font-semibold">Последняя неделя</h2>
-            <div className="mt-6 flex h-56 items-end gap-3">
-              {Array.from({ length: 7 }).map((_, index) => {
-                const entry = weekEntries[6 - index];
-                const mood = entry ? getMood(entry.moodId) : null;
-                const height = mood ? `${Math.max(mood.score * 18, 18)}%` : "8%";
+          <aside className="flex flex-col gap-4">
+            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="text-xl font-semibold">Уведомления</h2>
+              <p className="mt-3 text-sm leading-6 text-slate-500">
+                Напоминания работают в открытой вкладке каждый час с 10:00 до
+                24:00.
+              </p>
+              <button
+                type="button"
+                onClick={enableNotifications}
+                className="mt-5 w-full rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-blue-300 hover:text-blue-700"
+              >
+                {notificationPermission === "granted" && notificationsEnabled
+                  ? "Уведомления включены"
+                  : "Включить уведомления"}
+              </button>
+              <p className="mt-3 text-xs text-slate-400">
+                Статус: {notificationPermission}
+              </p>
+            </section>
 
-                return (
-                  <div
-                    key={`${entry?.id ?? "empty"}-${index}`}
-                    className="flex flex-1 flex-col items-center gap-2"
-                  >
-                    <div className="flex h-44 w-full items-end rounded-lg bg-white/10 p-1">
-                      <div
-                        className={`w-full rounded-md ${
-                          mood?.accent ?? "bg-white/25"
-                        }`}
-                        style={{ height }}
-                      />
-                    </div>
-                    <span className="h-4 text-xs text-white/60">
-                      {entry ? formatDate(entry.date).split(" ")[0] : ""}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-            <p className="mt-5 text-sm leading-6 text-white/70">
-              График показывает последние сохраненные дни. Чем выше столбец,
-              тем лучше оценка настроения.
-            </p>
+            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="text-xl font-semibold">Профиль</h2>
+              <p className="mt-3 break-words text-sm text-slate-500">{email}</p>
+              <button
+                type="button"
+                onClick={switchProfile}
+                className="mt-5 w-full rounded-lg border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400"
+              >
+                Сменить email
+              </button>
+            </section>
           </aside>
         </div>
 
+        {(error || status) && (
+          <div
+            className={`rounded-lg border px-4 py-3 text-sm ${
+              error
+                ? "border-rose-200 bg-rose-50 text-rose-700"
+                : "border-blue-200 bg-blue-50 text-blue-700"
+            }`}
+          >
+            {error || status}
+          </div>
+        )}
+
         <section className="pb-8">
           <div className="mb-4 flex items-center justify-between gap-4">
-            <h2 className="text-2xl font-semibold">История</h2>
-            {entries.length > 0 ? (
-              <button
-                type="button"
-                onClick={() => setEntries([])}
-                className="rounded-lg border border-black/10 bg-white px-4 py-2 text-sm font-medium text-black/65 transition hover:border-black/25 hover:text-black"
-              >
-                Очистить
-              </button>
+            <h2 className="text-2xl font-semibold">История за 7 дней</h2>
+            {isLoading ? (
+              <span className="text-sm text-slate-500">Загрузка...</span>
             ) : null}
           </div>
 
-          {sortedEntries.length > 0 ? (
+          {entries.length > 0 ? (
             <div className="grid gap-3">
-              {sortedEntries.map((entry) => {
-                const mood = getMood(entry.moodId);
+              {entries.map((entry) => {
+                const meta = getScoreMeta(entry.score);
 
                 return (
                   <article
                     key={entry.id}
-                    className="grid gap-4 rounded-lg border border-black/10 bg-white p-4 shadow-sm sm:grid-cols-[180px_minmax(0,1fr)_auto] sm:items-center"
+                    className="grid gap-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:grid-cols-[170px_minmax(0,1fr)_auto] sm:items-center"
                   >
                     <div>
-                      <p className="font-semibold">{formatDate(entry.date)}</p>
-                      <p className="mt-1 text-sm text-black/50">{mood.tone}</p>
+                      <p className="font-semibold">{formatHour(entry.hourKey)}</p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        {entry.timezone}
+                      </p>
                     </div>
                     <div className="min-w-0">
                       <div className="flex items-center gap-3">
                         <span
-                          className={`h-3 w-3 rounded-full ${mood.accent}`}
-                        />
-                        <p className="font-medium">{mood.label}</p>
+                          className={`flex h-9 w-9 items-center justify-center rounded-lg text-sm font-semibold ${meta.bg} ${meta.text}`}
+                        >
+                          {entry.score}
+                        </span>
+                        <p className="font-medium">{meta.tone}</p>
                       </div>
                       {entry.note ? (
-                        <p className="mt-2 break-words text-sm leading-6 text-black/65">
+                        <p className="mt-2 break-words text-sm leading-6 text-slate-600">
                           {entry.note}
                         </p>
                       ) : null}
                     </div>
                     <button
                       type="button"
-                      onClick={() => removeEntry(entry.id)}
-                      className="rounded-lg border border-black/10 px-3 py-2 text-sm text-black/55 transition hover:border-rose-300 hover:text-rose-700"
+                      onClick={() => void removeEntry(entry.id)}
+                      className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-500 transition hover:border-rose-300 hover:text-rose-700"
                     >
                       Удалить
                     </button>
@@ -337,7 +639,7 @@ export default function Home() {
               })}
             </div>
           ) : (
-            <div className="rounded-lg border border-dashed border-black/20 bg-white/70 p-8 text-center text-black/55">
+            <div className="rounded-lg border border-dashed border-slate-300 bg-white/70 p-8 text-center text-slate-500">
               Записей пока нет.
             </div>
           )}
@@ -349,8 +651,8 @@ export default function Home() {
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-black/10 bg-white px-4 py-3 shadow-sm">
-      <p className="text-xs font-medium uppercase tracking-[0.12em] text-black/45">
+    <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+      <p className="text-xs font-medium uppercase tracking-[0.12em] text-slate-400">
         {label}
       </p>
       <p className="mt-2 text-2xl font-semibold">{value}</p>
