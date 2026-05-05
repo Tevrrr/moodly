@@ -5,7 +5,7 @@ type SqlClient = ReturnType<typeof neon>;
 let sqlClient: SqlClient | null = null;
 
 export function getSql() {
-  const databaseUrl = process.env.DATABASE_URL ?? process.env.MOOD_DATABASE_URL;
+  const databaseUrl = process.env.MOOD_DATABASE_URL || process.env.DATABASE_URL;
 
   if (!databaseUrl) {
     throw new Error("DATABASE_URL or MOOD_DATABASE_URL is not configured");

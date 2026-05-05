@@ -10,7 +10,7 @@ if (
   process.loadEnvFile(".env.local");
 }
 
-const databaseUrl = process.env.DATABASE_URL ?? process.env.MOOD_DATABASE_URL;
+const databaseUrl = process.env.MOOD_DATABASE_URL || process.env.DATABASE_URL;
 
 if (!databaseUrl) {
   console.error("DATABASE_URL or MOOD_DATABASE_URL is not configured");
