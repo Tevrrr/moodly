@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { AppShell, cn, panelClass, PageHeader } from "@/components/mood-ui";
+import {
+  AppShell,
+  cn,
+  panelClass,
+  PageHeader,
+  secondaryButtonClass,
+} from "@/components/mood-ui";
 import {
   getScoreColor,
   getScoreTableText,
@@ -114,6 +120,38 @@ function formatDateRange(entries: MoodEntry[]) {
   )}`;
 }
 
+function escapeTsvCell(value: string) {
+  if (!/["\n\r\t]/.test(value)) {
+    return value;
+  }
+
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+function buildTableTsv(
+  days: DayColumn[],
+  hours: number[],
+  entriesByDayHour: Map<string, MoodEntry>,
+) {
+  const header = ["Время", ...days.map((day) => `${day.label} ${day.shortLabel}`)];
+  const rows = hours.map((hour) => [
+    formatHourRange(hour),
+    ...days.map((day) => {
+      const entry = entriesByDayHour.get(`${day.key}-${hour}`);
+
+      if (!entry) {
+        return "";
+      }
+
+      return `${entry.note || "Без занятия"}\nH = ${entry.score}`;
+    }),
+  ]);
+
+  return [header, ...rows]
+    .map((row) => row.map(escapeTsvCell).join("\t"))
+    .join("\n");
+}
+
 async function readError(response: Response) {
   try {
     const body = (await response.json()) as { error?: string };
@@ -147,6 +185,7 @@ export default function ChartPage() {
   });
   const [isChartLoading, setIsChartLoading] = useState(false);
   const [isTableLoading, setIsTableLoading] = useState(false);
+  const [copyStatus, setCopyStatus] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -342,6 +381,24 @@ export default function ChartPage() {
     () => formatDateRange(tableEntries),
     [tableEntries],
   );
+
+  async function copyTable() {
+    setCopyStatus("");
+
+    if (tableDays.length === 0 || tableHours.length === 0) {
+      setCopyStatus("В таблице пока нет данных для копирования.");
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(
+        buildTableTsv(tableDays, tableHours, entryByDayHour),
+      );
+      setCopyStatus("Таблица скопирована. Можно вставлять в Google Sheets.");
+    } catch {
+      setCopyStatus("Не удалось скопировать таблицу.");
+    }
+  }
 
   return (
     <AppShell>
@@ -566,6 +623,19 @@ export default function ChartPage() {
                     </span>
                   ))}
                 </div>
+                <button
+                  type="button"
+                  onClick={() => void copyTable()}
+                  disabled={isTableLoading || tableHours.length === 0}
+                  className={cn(secondaryButtonClass, "w-full sm:w-auto")}
+                >
+                  Копировать таблицу
+                </button>
+                {copyStatus ? (
+                  <p className="max-w-xs text-right text-xs font-medium text-slate-500">
+                    {copyStatus}
+                  </p>
+                ) : null}
                 <PaginationControls
                   page={tablePagination.page}
                   totalPages={tablePagination.totalPages}
